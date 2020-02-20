@@ -1,0 +1,18 @@
+mdt.sxu-MDT0000.md_stats=
+snapshot_time             1582187143.294366489 secs.nsecs
+open                      824442055 samples [reqs]
+close                     448401459 samples [reqs]
+mknod                     6157446 samples [reqs]
+link                      248895 samples [reqs]
+unlink                    5504508 samples [reqs]
+mkdir                     511342 samples [reqs]
+rmdir                     444870 samples [reqs]
+rename                    441396 samples [reqs]
+getattr                   36696551 samples [reqs]
+setattr                   4862050 samples [reqs]
+getxattr                  3620609 samples [reqs]
+setxattr                  2645 samples [reqs]
+statfs                    6568 samples [reqs]
+sync                      50974 samples [reqs]
+samedir_rename            407950 samples [reqs]
+crossdir_rename           33446 samples [reqs]
