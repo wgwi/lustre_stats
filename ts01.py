@@ -7,6 +7,7 @@ import pprint
 import asyncio
 import time
 import re
+import itertool
 from functools import partial
 import psutil
 from enum import Enum
@@ -21,14 +22,6 @@ logging.basicConfig(
 
 print(psutil.cpu_percent())
 print(psutil.virtual_memory())
-
-# MDS, OSS both support
-CONST_HEALTH_FILE = '/sys/fs/lustre/health_check'
-def read_health()-> bool: 
-    with open(CONST_HEALTH_FILE, 'r') as f:
-        if f.read().startswith('healthy'):
-            return True
-        return False
 
 
 async def run_cmd(cmd: str, callback, sec_await) -> (str, int):
@@ -46,15 +39,32 @@ async def run_cmd(cmd: str, callback, sec_await) -> (str, int):
             callback(stdout.decode())
             await asyncio.sleep(sec_await)
 
+##############################################
+# MDS, OSS both support
+# Healthy and Version
+##############################################
+CONST_HEALTH_FILE = '/sys/fs/lustre/health_check'
+CONST_LUSTRE_VERSION = '/sys/fs/lustre/version'
 
-def parse_Cv(lines :str):
-    ##################################################################
-    ### parse multi-line "osd-ldiskfs.sxu-MDT0000.filesfree=177243814"
-    ###                               ^^^^^^^^^^^
-    ##################################################################
-    ### MDS num_exports, freefiles, totalfiles, kbytesfree, kbytestotal
-    ### OSS kbytesfree, kbytestotal
-    ##################################################################
+def read_health()-> bool: 
+    with open(CONST_HEALTH_FILE, 'r') as f:
+        if f.read().startswith('healthy'):
+            return True
+        return False
+
+def read_version()-> str: 
+    with open(CONST_LUSTRE_VERSION, 'r') as f:
+        return f.read()
+
+
+##################################################################
+### parse multi-line "osd-ldiskfs.sxu-MDT0000.filesfree=177243814"
+###                               ^^^^^^^^^^^
+###---------------------------------------------------------------
+### MDS num_exports, freefiles, totalfiles, kbytesfree, kbytestotal
+### OSS kbytesfree, kbytestotal
+##################################################################
+def parse_KV(lines :str):
     rows = lines.split('\n')
     vs = [(x[1], x[-1]) for x in map(re.split('\.|='), rows)]
     return vs
@@ -63,11 +73,12 @@ class MO(Enum):
     MDS = 1
     OSS = 2
 
+
+##################################################################
+### parse multi-parts mds_stats, detail in mds_stats.res
+### param cares about: snapshot_time, disk_name, open, sync                          
+##################################################################
 def parse_Stats(lines: str, mo: MO):
-    ##################################################################
-    ### parse multi-parts mds_stats, detail in mds_stats.res
-    ### param cares about: snapshot_time, disk_name, open, sync                          
-    ##################################################################
     ts = []  
     vs = {}  ## used to store {dist_name, snapshot_time, open_number, sync_number}
     if mo == MO.MDS:
@@ -89,8 +100,53 @@ def parse_Stats(lines: str, mo: MO):
     return ts
 
 
+def parse_client_stats(line, mo: MO):
+    ### mdt.sxu-MDT0000.exports.192.168.1.102@tcp.stats=
+    ###     ^^^^^^^^^^^         ^^^^^^^^^^^^^
+    if mo == MO.MDS:
+        CONST_REGEX = 'mdt.([\w\-]+).exports.([\d\.]+)@tcp.stats='
+    else:
+        CONST_REGEX = 'obdfilter.([\w\-]+).exports.([\d\.]+)@tcp.stats='
+
+
 def parse_Per_Stats(lines: str, mo: MO):
-    ''''''
+    if mo == MO.MDS:
+        CONST_PARAM = ['snap', 'open']  ## not same like one_line_stats
+        CONST_REGEX = 'mdt.([\w\-]+).exports.([\d\.]+)@tcp.stats='
+    else:
+        ### why OSS use TCP stats not IB stats
+        CONST_PARAM = ['snap', 'read', 'writ']
+        CONST_REGEX = 'obdfilter.([\w\-]+).exports.([\d\.]+)@tcp.stats='
+
+
+    rows = lines.split('\n')
+    if len(rows) == 0:
+        return []
+
+    io_flag = True
+    be_back = {}
+    (disk_id, client_ip) = (None, None)
+    for row in rows:
+        if len(row) == 0:
+            continue
+        if row[-1] == '=':  ## lo.stats or tcp.stats
+            res = re.findall(CONST_REGEX, row)
+            if len(res):  ## tcp.stats
+                io_flag = False
+                (disk_id, client_ip) = res[0]
+                if disk_id not in be_back:
+                    be_back[disk_id] = {client_ip: {}}
+                else:
+                    be_back[disk_id][client_ip] = {}
+            else: ## lo.stats
+                io_flag = True
+        elif io_flag == True:
+            continue
+        else:
+            tt_list = row.split()
+            if tt_list[0][:4] in CONST_PARAM:
+                be_back[disk_id][client_ip][tt_list[0]] = tt_list[1]
+    return be_back
 
 
 MDSds = [('mdt.*MDT*.num_exports', 'Number of connections', action), 
